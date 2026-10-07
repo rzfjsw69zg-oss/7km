@@ -1,0 +1,176 @@
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+import httpx
+import asyncio
+from typing import List
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+HTML_CONTENT = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>فاحص توكنات الديسكورد والنيترو</title>
+    <style>
+        body { font-family: system-ui, sans-serif; background: #0f0f12; color: #fff; padding: 20px; direction: rtl; }
+        .container { max-width: 850px; margin: 0 auto; }
+        h2 { text-align: center; color: #5865F2; }
+        textarea { width: 100%; height: 180px; background: #18191c; color: #fff; border: 1px solid #2f3136; padding: 12px; border-radius: 8px; box-sizing: border-box; font-size: 14px; }
+        button { background: #5865F2; color: white; border: none; padding: 14px; font-size: 16px; font-weight: bold; border-radius: 6px; cursor: pointer; width: 100%; margin-top: 10px; }
+        button:disabled { background: #444; }
+        .stats { display: flex; gap: 10px; margin-top: 15px; }
+        .stat-box { flex: 1; padding: 10px; background: #18191c; text-align: center; border-radius: 6px; font-weight: bold; }
+        .results-list { margin-top: 20px; }
+        .card { background: #18191c; padding: 12px; margin-bottom: 8px; border-radius: 6px; border-right: 5px solid #444; word-break: break-all; }
+        .valid { border-color: #3ba55d; }
+        .locked { border-color: #faa81a; }
+        .invalid { border-color: #ed4245; }
+        .badge { padding: 3px 8px; border-radius: 4px; font-size: 12px; background: #5865F2; color: #fff; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🚀 فاحص التوكنات والنيترو (Discord Token Checker)</h2>
+        <textarea id="tokensInput" placeholder="أدخل التوكنات هنا (توكن في كل سطر)...&#10;مثال: OTk3...&#10;أو email:pass:token"></textarea>
+        <button id="checkBtn" onclick="startCheck()">بدء الفحص الآن</button>
+
+        <div class="stats" id="statsArea" style="display:none;">
+            <div class="stat-box" style="color: #3ba55d;">شغالة: <span id="validCount">0</span></div>
+            <div class="stat-box" style="color: #fee75c;">نيترو: <span id="nitroCount">0</span></div>
+            <div class="stat-box" style="color: #faa81a;">مقفلة: <span id="lockedCount">0</span></div>
+            <div class="stat-box" style="color: #ed4245;">تالفة: <span id="invalidCount">0</span></div>
+        </div>
+
+        <div class="results-list" id="resultsContainer"></div>
+    </div>
+
+    <script>
+        async function startCheck() {
+            const input = document.getElementById("tokensInput").value.trim();
+            const btn = document.getElementById("checkBtn");
+            const container = document.getElementById("resultsContainer");
+
+            if (!input) return alert("يرجى إدخال توكن واحد على الأقل.");
+
+            const tokens = input.split('\\n').map(t => t.trim()).filter(t => t);
+
+            btn.disabled = true;
+            btn.innerText = "⏳ جاري الفحص...";
+            container.innerHTML = "";
+            document.getElementById("statsArea").style.display = "flex";
+
+            try {
+                const response = await fetch("/api/check-tokens", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ tokens })
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || "حدث خطأ");
+
+                let valid = 0, locked = 0, invalid = 0, nitro = 0;
+
+                data.results.forEach(item => {
+                    if (item.status === 'valid') valid++;
+                    if (item.status === 'locked') locked++;
+                    if (item.status === 'invalid') invalid++;
+                    if (item.nitro) nitro++;
+
+                    const div = document.createElement("div");
+                    div.className = `card ${item.status}`;
+                    div.innerHTML = `
+                        <strong>الحالة:</strong> ${item.status.toUpperCase()} | 
+                        <strong>المستخدم:</strong> ${item.username} 
+                        ${item.nitro ? `<span class="badge">💎 ${item.nitro_type}</span>` : ''} <br>
+                        <small style="color: #aaa;">التوكن: ${item.token}</small>
+                    `;
+                    container.appendChild(div);
+                });
+
+                document.getElementById("validCount").innerText = valid;
+                document.getElementById("nitroCount").innerText = nitro;
+                document.getElementById("lockedCount").innerText = locked;
+                document.getElementById("invalidCount").innerText = invalid;
+
+            } catch (err) {
+                alert("❌ حدث خطأ: " + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "بدء الفحص الآن";
+            }
+        }
+    </script>
+</body>
+</html>
+"""
+
+class TokenCheckRequest(BaseModel):
+    tokens: List[str]
+
+@app.get("/", response_class=HTMLResponse)
+async def serve_index():
+    return HTML_CONTENT
+
+async def check_single_token(client: httpx.AsyncClient, token: str):
+    clean_token = token.split(":")[-1].strip() if ":" in token else token.strip()
+    headers = {"Authorization": clean_token}
+    
+    try:
+        res = await client.get("https://discord.com/api/v9/users/@me", headers=headers)
+        if res.status_code == 200:
+            user_data = res.json()
+            premium_type = user_data.get("premium_type", 0)
+            
+            nitro_status = False
+            nitro_type = "لا يوجد"
+            if premium_type == 1:
+                nitro_status = True
+                nitro_type = "Nitro Classic"
+            elif premium_type == 2:
+                nitro_status = True
+                nitro_type = "Nitro Boost"
+            elif premium_type == 3:
+                nitro_status = True
+                nitro_type = "Nitro Basic"
+
+            return {
+                "token": clean_token,
+                "status": "valid",
+                "username": f"{user_data.get('username')}#{user_data.get('discriminator', '0')}",
+                "user_id": user_data.get("id"),
+                "nitro": nitro_status,
+                "nitro_type": nitro_type
+            }
+        elif res.status_code == 403:
+            return {"token": clean_token, "status": "locked", "username": "N/A", "nitro": False}
+        else:
+            return {"token": clean_token, "status": "invalid", "username": "N/A", "nitro": False}
+    except Exception:
+        return {"token": clean_token, "status": "error", "username": "N/A", "nitro": False}
+
+@app.post("/api/check-tokens")
+async def check_tokens(payload: TokenCheckRequest):
+    if not payload.tokens or len(payload.tokens) > 1000:
+        raise HTTPException(status_code=400, detail="أدخل من 1 إلى 1000 توكن.")
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        tasks = [check_single_token(client, token) for token in payload.tokens]
+        results = await asyncio.gather(*tasks)
+
+    return {
+        "status": "success",
+        "total": len(results),
+        "results": results
+    }
