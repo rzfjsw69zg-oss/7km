@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>فاحص توكنات الديسكورد</title>
+    <style>
+        body { font-family: system-ui, sans-serif; background: #121212; color: #fff; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        textarea { width: 100%; height: 150px; background: #1e1e1e; color: #fff; border: 1px solid #333; padding: 10px; border-radius: 8px; box-sizing: border-box; }
+        button { background: #5865F2; color: white; border: none; padding: 12px 24px; font-size: 16px; border-radius: 6px; cursor: pointer; margin-top: 10px; width: 100%; }
+        button:disabled { background: #444; }
+        .result-card { background: #1e1e1e; padding: 15px; margin-top: 10px; border-radius: 8px; border-right: 4px solid #444; }
+        .valid { border-color: #43b581; }
+        .locked { border-color: #faa61a; }
+        .invalid { border-color: #f04747; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🔍 فاحص التوكنات (Discord Token Checker)</h2>
+        <textarea id="tokensInput" placeholder="أدخل التوكنات هنا (كل توكن في سطر جديد)..."></textarea>
+        <button id="checkBtn" onclick="runCheck()">بدء الفحص</button>
+        
+        <div id="statusText" style="margin-top: 15px;"></div>
+        <div id="resultsContainer"></div>
+    </div>
+
+    <script>
+        async function runCheck() {
+            const input = document.getElementById("tokensInput").value.trim();
+            const btn = document.getElementById("checkBtn");
+            const statusText = document.getElementById("statusText");
+            const resultsContainer = document.getElementById("resultsContainer");
+
+            if (!input) return alert("يرجى إدخال توكن واحد على الأقل.");
+
+            const tokens = input.split('\n').map(t => t.trim()).filter(t => t);
+            
+            btn.disabled = true;
+            statusText.innerText = "⏳ جاري إرسال التوكنات ومعالجتها...";
+            resultsContainer.innerHTML = "";
+
+            try {
+                // سنقوم بتغيير هذا الرابط لاحقاً بعد رفع الخلفية على Render
+                const response = await fetch("/api/check-tokens", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ tokens })
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || "حدث خطأ");
+
+                statusText.innerText = `✅ اكتمل الفحص! الإجمالي: ${data.total}`;
+                
+                data.results.forEach(item => {
+                    const div = document.createElement("div");
+                    div.className = `result-card ${item.status}`;
+                    div.innerHTML = `
+                        <strong>الحالة:</strong> ${item.status.toUpperCase()} <br>
+                        <strong>المستخدم:</strong> ${item.username || 'مجهول'} (${item.user_id || 'N/A'}) <br>
+                        <strong>Nitro:</strong> ${item.nitro ? 'نعم' : 'لا'} | <strong>العمر:</strong> ${item.age_days || 0} يوم
+                    `;
+                    resultsContainer.appendChild(div);
+                });
+
+            } catch (err) {
+                statusText.innerText = "❌ حدث خطأ: " + err.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>
